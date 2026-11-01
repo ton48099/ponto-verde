@@ -1,0 +1,6 @@
+@echo off
+set ADB=%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe
+echo Clicando em Ajustes...
+%ADB% shell input tap 635 1480
+echo Clicando em Avançado...
+%ADB% shell input tap 240 1280

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- seta de rota, branca, no centro da área segura -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,22 L79,79 L54,66 L29,79 Z" />
+    <path
+        android:fillColor="#1B7F4B"
+        android:pathData="M54,40 L65,66 L54,60 L43,66 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,84 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" />
+</vector>

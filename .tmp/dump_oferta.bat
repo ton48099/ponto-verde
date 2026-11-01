@@ -1,0 +1,6 @@
+@echo off
+set ADB=%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe
+echo Fazendo dump da tela...
+%ADB% shell uiautomator dump /sdcard/ui.xml
+%ADB% shell cat /sdcard/ui.xml > C:\Users\Admin\Downloads\zecaeuacho\ponto-verde\.tmp\ui_dump.xml
+echo Dump salvo. Analisando botoes clicaveis...

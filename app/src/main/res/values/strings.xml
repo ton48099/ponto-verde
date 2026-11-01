@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_nome">Ponto Verde</string>
+    <string name="servico_descricao">Lê a oferta de corrida que aparece na tela dos apps de motorista, calcula R$/km e R$/h e mostra um cartão com a cor da oferta. Nenhum dado sai do aparelho.</string>
+</resources>
