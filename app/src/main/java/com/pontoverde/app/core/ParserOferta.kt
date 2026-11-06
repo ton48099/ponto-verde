@@ -128,12 +128,24 @@ object ParserOferta {
     private fun extrairValor(texto: String): Double? {
         for (m in reValor.findAll(texto)) {
             val antes = texto.substring((m.range.first - 12).coerceAtLeast(0), m.range.first)
-            val depois = texto.substring(m.range.last + 1, (m.range.last + 6).coerceAtMost(texto.length))
             if (antes.contains("Est.", ignoreCase = true)) continue
-            if (depois.trimStart().startsWith("/km")) continue
+            if (seguidoDePorKm(texto, m.range.last)) continue
             return numero(m.groupValues[1])
         }
-        return reValorSolto.find(texto)?.let { numero(it.groupValues[1]) }
+        // O número solto também não pode ser o preço por km: em "R$ 1,54/km"
+        // o valor da corrida é outro, e pegar o 1,54 registrava corrida de R$ 1,54.
+        return reValorSolto.findAll(texto)
+            .firstOrNull { !seguidoDePorKm(texto, it.range.last) }
+            ?.let { numero(it.groupValues[1]) }
+    }
+
+    /** Verdadeiro quando o número é seguido de "/km" ou "por km" no texto. */
+    private fun seguidoDePorKm(texto: String, fim: Int): Boolean {
+        val depois = texto.substring(fim + 1, (fim + 9).coerceAtMost(texto.length))
+            .trimStart()
+            .lowercase()
+        return depois.startsWith("/km") || depois.startsWith("/ km") ||
+            depois.startsWith("por km") || depois.startsWith("porkm")
     }
 
     private fun extrairKms(texto: String): List<Double> =

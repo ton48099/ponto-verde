@@ -4,14 +4,16 @@ Avaliador local de ofertas de corrida para Android. Lê a oferta que aparece na 
 dos apps de motorista, calcula R$/km e R$/h, pinta um cartão com a cor da oferta e
 guarda tudo num histórico local, dia a dia.
 
-**Pacote:** `com.pontoverde.app` · **Versão:** 0.1.0 · **Uso:** estritamente pessoal.
+**Pacote:** `com.pontoverde.app` · **Versão:** 0.2.0 · **Uso:** estritamente pessoal.
 
 ## Privacidade
 
-O APK **não tem permissão de `INTERNET`** (a permissão que o ML Kit declara é removida
-no manifesto). Nada do que o app lê pode sair do aparelho. A imagem capturada é
-reciclada após o reconhecimento; o texto só é guardado se você ligar "Guardar texto
-lido".
+O APK **só usa a internet quando o corretor IA está ligado** (Ajustes → Avançado →
+Opções de desenvolvedor). Com o corretor desligado — que é o padrão — nenhuma
+requisição é feita: o serviço nem tenta abrir conexão sem uma API key configurada.
+A imagem capturada é reciclada após o reconhecimento; o texto só é guardado se você
+ligar "Guardar texto lido", e o log de treino só grava se você ligar "Registrar cada
+leitura".
 
 ## Requisitos para compilar
 
@@ -77,9 +79,51 @@ oferta, o botão **Baixar em Downloads** copia a imagem para
 
 ### Bolha flutuante
 
-Enquanto o copiloto está ligado, uma bolha **PV** fica sobre os outros apps. Tocar abre
-o Ponto Verde; arrastar muda a posição (ela é lembrada). Dentro do app a bolha some — e
-com o copiloto desligado ela não aparece em lugar nenhum.
+Enquanto o copiloto está ligado, uma bolha **PV** fica sobre os outros apps, com a
+**temperatura do aparelho** logo abaixo. Tocar força uma leitura da tela; arrastar muda a
+posição (ela é lembrada). Dentro do app a bolha some — e com o copiloto desligado ela não
+aparece em lugar nenhum.
+
+A temperatura vem da **bateria** — a única que o Android entrega para apps comuns; a do
+processador exige permissão de sistema. É atualizada a cada 30 s, fica âmbar acima de
+40 °C e vermelha acima de 44 °C. Com o Uber aberto no monitor do Smart Connect o celular
+fica na mão: a bolha é o termômetro de bolso para ver se ele está esquentando.
+
+### Log de treino
+
+Ajustes → Avançado → Opções de desenvolvedor → **Log de treino → Registrar cada
+leitura**. Com isso, cada leitura (automática ou forçada) grava em
+`files/log_treino/` um par de arquivos:
+
+- `oferta_<data>_<pacote>.jpg` — a imagem recortada que o OCR enxergou;
+- `oferta_<data>_<pacote>.json` — texto bruto do ML Kit, o que o parser entendeu,
+  a avaliação final e, quando houver, a resposta da IA.
+
+É o material para calibrar as heurísticas do parser: quando uma oferta é lida errado,
+o JSON mostra exatamente o que a tela dizia e o que o OCR devolveu. O botão **Exportar
+ZIP para Downloads** junta tudo em `Download/Ponto Verde/` e o **Compartilhar ZIP**
+manda por WhatsApp, Drive ou e-mail. Para puxar no PC:
+
+```powershell
+adb pull "/sdcard/Download/Ponto Verde"
+```
+
+O log é diagnóstico e nunca derruba a leitura: se a gravação falhar, o cartão aparece
+do mesmo jeito.
+
+### Corretor IA (opcional, NVIDIA Nemotron)
+
+Ainda em Opções de desenvolvedor, o cartão **Corretor IA (NVIDIA Nemotron)** liga um
+segundo leitor: quando o parser local não entende a oferta (ou em toda leitura, se
+"IA em todas as leituras" estiver ligado), o texto bruto do OCR é enviado para a API
+da NVIDIA e a resposta em JSON é usada no lugar. A chave é sua, fica salva nas
+preferências do app e o endpoint/modelo são configuráveis — o padrão é
+`https://integrate.api.nvidia.com/v1/chat/completions` com
+`nvidia/nemotron-3-ultra-550b-a55b`.
+
+O cartão tem **Testar conexão** (manda uma oferta de exemplo) e **Listar modelos da
+conta** (mostra os IDs que a sua chave pode usar). O resultado da IA aparece no log de
+treino em `fonte: "ia"` e em `ia_bruta`.
 
 ## Estrutura
 
@@ -89,7 +133,7 @@ app/src/main/java/com/pontoverde/app/
   data/        SQLiteOpenHelper (histórico) + SharedPreferences (ajustes) + repositório
   capture/     serviço de acessibilidade, cartão flutuante (Views), bolha, prints, TTS
   ui/          Compose: tema, componentes, quatro abas, calculadora
-app/src/test/  42 testes: bordas, alertas, parser, custos, meta do dia e ofertas reais
+app/src/test/  55 testes: bordas, alertas, parser, custos, meta do dia, vigia, resposta da IA e ofertas reais
 ```
 
 ### Organização das telas
@@ -97,13 +141,14 @@ app/src/test/  42 testes: bordas, alertas, parser, custos, meta do dia e ofertas
 | aba | conteúdo |
 |---|---|
 | **Início** | "Meu dia": saldo líquido, bruto/despesas, ganho por km e hora, meta com custo, faturamento por app, gastos, km e horas — e **Dias salvos** |
-| **Copiloto** | botão **Ativar/Desativar copiloto**, botão **Tela preta OLED**, status do serviço, resumo de hoje e última oferta |
+| **Copiloto** | botão **Ativar/Desativar copiloto**, botão **Tela preta OLED** com a engrenagem de status, status do serviço, última leitura, **vigia (notificação)**, resumo de hoje e última oferta |
 | **Histórico** | ofertas **por dia**, com seletor de data, resumo do dia e "Limpar histórico" |
 | **Ajustes** | cartões recolhíveis: Aparência, Regras, Custos, Cartão, Alertas, Dados e Avançado |
 
 Em **Ajustes → Avançado → Opções de desenvolvedor** ficam: permissões, modo rápido,
-ler qualquer app, avisar falha, guardar texto, calcular oferta, apagar histórico,
-estatísticas e **Recusa automática (experimental)**.
+ler qualquer app, avisar falha, guardar texto, **log de treino**, **corretor IA
+(NVIDIA Nemotron)**, calcular oferta, apagar histórico, estatísticas e **Recusa
+automática (experimental)**.
 
 ## Meu dia, meta e dias salvos
 
@@ -218,8 +263,16 @@ válidas para aquelas telas.
 - **Tema claro, escuro (OLED) ou o do sistema**, com cartões recolhíveis em Ajustes.
 - Calculadora manual.
 - **Saldo líquido como copinho de progresso** da meta de lucro do dia (verde quando bate).
-- **Tela preta OLED** no Copiloto: cobre a tela principal de preto (status bar, navegação e notificações incluídas); toque no X à direita para sair.
+- **Tela preta OLED** no Copiloto: cobre de preto a **tela do celular inteira**, e não a tela em que o app está desenhado — com o app aberto no monitor do Smart Connect o celular fica preto e o monitor continua normal. Fica ligada entre aberturas do app e sai no X à direita.
+- **Preto por cima de tudo**: a janela é criada na camada do próprio serviço de acessibilidade (`TYPE_ACCESSIBILITY_OVERLAY`, base layer 311000), que fica **acima da barra de status (151000) e da de navegação (241000)** — o celular fica preto sem relógio, ícones nem botões. Sem o serviço conectado o app cai para a sobreposição comum (`TYPE_APPLICATION_OVERLAY`), que cobre só o conteúdo dos apps; nesse modo as barras continuam à mostra, e a janela sobe para a camada de cima sozinha quando o serviço reconecta.
+- **Status da tela preta** (engrenagem ao lado do botão): responde "a tela preta está ativa na tela principal? Sim/Não" lendo a janela de verdade, não o botão — dá para conferir do Smart Connect se o celular está coberto, e se o sistema fechar a janela o status muda sozinho. A mesma resposta aparece como linha de status embaixo dos botões.
+- **Vigia do copiloto (notificação)**: uma notificação permanente "Copiloto ativo" com a **hora da última oferta** e um cronômetro desde ela — o cronômetro é desenhado pelo sistema a partir do horário gravado, então **continua contando mesmo se o Android matar o app**. Separadamente, cada leitura remarca um alarme `RTC_WAKEUP` (`setAndAllowWhileIdle`, sem pedir `SCHEDULE_EXACT_ALARM`); passando de **10 min sem ler**, o alarme acorda o app e o aviso sonoro aparece no canal de importância alta "Leitor parado" ("Nenhuma oferta lida há X min"). Uma leitura nova apaga o aviso. Pede `POST_NOTIFICATIONS` (Android 13+): enquanto faltar, o Copiloto mostra **Permitir** ao lado do status da vigia. Ela acompanha o copiloto — desligar o copiloto, parar o serviço ou perder a acessibilidade cancela notificação e alarme.
+- **Vigia do leitor**: se uma captura ou o OCR nunca responder, o leitor se destrava sozinho em 20 s (antes ele podia ficar travado até reiniciar o app), e a aba Copiloto mostra a hora da última oferta lida.
+- **Status honesto do serviço**: o Copiloto separa "acessibilidade ligada no sistema" de "serviço conectado" — antes a tela dizia "ativo" com o serviço parado, e o leitor parecia ligado enquanto nada era lido.
+- **Aviso de otimização de bateria** no Copiloto: enquanto o Android puder matar o app para economizar energia, a tela avisa e oferece o botão que pede para tirar o Ponto Verde dos apps restritos — foi o gerenciador de bateria que derrubou o copiloto no teste.
 - **Recusa automática (experimental)** em Ajustes → Avançado → Opções de desenvolvedor: recusa ofertas vermelhas após 5 s se você não tocar no card. O card mostra um contador regressivo ("Recusa automática em 5s...") para você saber que está prestes a recusar. Funciona também com prints (modo "Ler qualquer app") para você testar sem afetar sua taxa de aceite no Uber/99.
+- **Log de treino** (opcional): para cada leitura grava a imagem recortada, o OCR bruto, o que o parser entendeu e a avaliação — exportável em ZIP para `Download/Ponto Verde/`. É o material para calibrar o parser com ofertas reais.
+- **Corretor IA opcional** (NVIDIA Nemotron): quando o parser não entende, manda o OCR bruto para a API e usa o JSON devolvido. Desligado por padrão; sem API key o app não abre conexão.
 
 ## Lacunas conhecidas
 

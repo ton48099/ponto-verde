@@ -45,20 +45,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        com.pontoverde.app.capture.EstadoLeitor.appAberto = true
-        com.pontoverde.app.capture.EstadoLeitor.bolha?.esconder()
+        // O serviço escuta este fluxo e é dono de mostrar/esconder a bolha.
+        com.pontoverde.app.capture.EstadoLeitor.appAberto.value = true
         runCatching { PontoVerdeApp.instancia.repositorio.recarregar() }
     }
 
     override fun onPause() {
         super.onPause()
-        com.pontoverde.app.capture.EstadoLeitor.appAberto = false
-        // A bolha só existe enquanto o copiloto está ligado. Sem esta checagem,
-        // sair do app reacendia a bolha mesmo com o modo desligado.
-        if (PontoVerdeApp.instancia.prefs.estado.value.capturaLigada) {
-            com.pontoverde.app.capture.EstadoLeitor.bolha?.mostrar()
-        } else {
-            com.pontoverde.app.capture.EstadoLeitor.bolha?.esconder()
-        }
+        com.pontoverde.app.capture.EstadoLeitor.appAberto.value = false
     }
 }

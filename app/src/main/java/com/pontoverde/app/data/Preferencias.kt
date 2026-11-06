@@ -64,6 +64,15 @@ data class Configuracao(
     /** Recusa automática (experimental): recusa ofertas vermelhas após 5 s se o usuário não
      *  tocar no card. Pode falhar no Uber se o X não for exposto pela acessibilidade. */
     val recusaAutomatica: Boolean = false,
+    /** Log de treino: guarda imagem recortada + OCR bruto + resultado de cada leitura. */
+    val registrarLog: Boolean = false,
+    /** Corretor opcional via API da NVIDIA (Nemotron). Desligado = nada sai do aparelho. */
+    val corretorIA: Boolean = false,
+    /** Manda toda leitura para a IA, mesmo quando o parser local entendeu. */
+    val iaSempre: Boolean = false,
+    val nvidiaApiKey: String = "",
+    val nvidiaModelo: String = "",
+    val nvidiaEndpoint: String = "",
     val alertas: ConfigAlertas = ConfigAlertas(),
     /** Regra única, aplicada a Uber e 99. */
     val limiaresGlobais: Limiares = Limiares(AppOrigem.UBER),
@@ -149,6 +158,12 @@ class Preferencias(context: Context) {
             modoTeste = sp.getBoolean("modo_teste", false),
             telaPreta = sp.getBoolean("tela_preta", false),
             recusaAutomatica = sp.getBoolean("recusa_automatica", false),
+            registrarLog = sp.getBoolean("registrar_log", false),
+            corretorIA = sp.getBoolean("corretor_ia", false),
+            iaSempre = sp.getBoolean("ia_sempre", false),
+            nvidiaApiKey = sp.getString("nvidia_api_key", "") ?: "",
+            nvidiaModelo = sp.getString("nvidia_modelo", "") ?: "",
+            nvidiaEndpoint = sp.getString("nvidia_endpoint", "") ?: "",
             alertas = alertas,
             limiaresGlobais = global,
             appsLigados = AppOrigem.reais.filter { sp.getBoolean("app_${it.name}", true) }.toSet(),
@@ -185,6 +200,12 @@ class Preferencias(context: Context) {
             putBoolean("modo_teste", c.modoTeste)
             putBoolean("tela_preta", c.telaPreta)
             putBoolean("recusa_automatica", c.recusaAutomatica)
+            putBoolean("registrar_log", c.registrarLog)
+            putBoolean("corretor_ia", c.corretorIA)
+            putBoolean("ia_sempre", c.iaSempre)
+            putString("nvidia_api_key", c.nvidiaApiKey)
+            putString("nvidia_modelo", c.nvidiaModelo)
+            putString("nvidia_endpoint", c.nvidiaEndpoint)
             putFloat("alerta_valorMinimo", c.alertas.valorMinimo.toFloat())
             putFloat("alerta_embarqueKm", c.alertas.embarqueMaxKm.toFloat())
             putInt("alerta_embarqueMin", c.alertas.embarqueMaxMin)
@@ -203,7 +224,20 @@ class Preferencias(context: Context) {
             AppOrigem.reais.forEach { app ->
                 putBoolean("app_${app.name}", app in c.appsLigados)
             }
+            // Restos da época de uma regra por app: já foram migrados para as
+            // chaves g_* acima, então saem do arquivo em vez de ficar de lixo.
+            CHAVES_ANTIGAS.forEach { remove(it) }
         }.apply()
+    }
+
+    private companion object {
+        /** Chaves de limiares por app da versão anterior à regra única. */
+        val CHAVES_ANTIGAS: List<String> = listOf(
+            "UBER", "APP99", "INDRIVE", "IFOOD", "TAXI", "REGIONAL", "OUTRO",
+        ).flatMap { app ->
+            listOf("kmRuim", "kmBom", "horaRuim", "horaBom", "notaRuim", "notaBom")
+                .map { campo -> "${app}_$campo" }
+        }
     }
 
     private fun lerLista(chave: String): Set<String> =

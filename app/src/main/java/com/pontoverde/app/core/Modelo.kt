@@ -86,7 +86,6 @@ data class Oferta(
 
     /** Só o trecho, sem o deslocamento — informativo. */
     val rsPorKmTrecho: Double get() = if (kmTrecho > 0) valor / kmTrecho else 0.0
-    val rsPorHoraTrecho: Double get() = if (minTrecho > 0) valor * 60.0 / minTrecho else 0.0
 
     /** Lucro real: valor menos o custo de rodar todos os km (trecho + embarque). */
     fun lucro(custoPorKm: Double): Double = valor - custoPorKm * kmTotal

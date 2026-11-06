@@ -70,6 +70,14 @@ class ParserTest {
     }
 
     @Test
+    fun `nao usa o preco por km como valor da corrida`() {
+        // Card do 99 mostra "R$ 1,54/km": antes isso virava uma corrida de R$ 1,54
+        // no histórico. Sem outro valor no texto, é melhor não classificar.
+        assertNull(ParserOferta.ler("R\$ 1,54/km\n14 min (14 km)"))
+        assertNull(ParserOferta.ler("13x R\$ 1,54 por km\n14 min (14 km)"))
+    }
+
+    @Test
     fun `ignora texto vazio`() {
         assertNull(ParserOferta.ler(""))
         assertNull(ParserOferta.ler(null))

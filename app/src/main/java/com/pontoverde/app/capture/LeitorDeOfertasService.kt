@@ -58,6 +58,8 @@ class LeitorDeOfertasService : AccessibilityService() {
     private val ultimaCaptura = AtomicLong(0L)
     private val ocupado = AtomicBoolean(false)
     private val recusaHandler = Handler(Looper.getMainLooper())
+    private val vigia = Handler(Looper.getMainLooper())
+    private var vigiaRunnable: Runnable? = null
     private var recusaRunnable: Runnable? = null
     private val contadorRecusaHandler = Handler(Looper.getMainLooper())
     private var contadorRecusaRunnable: Runnable? = null
@@ -85,6 +87,7 @@ class LeitorDeOfertasService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        EstadoLeitor.servico = this
         reconhecedor = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         narrador = Narrador(this)
         cartoes = Cartoes(this)
@@ -92,18 +95,36 @@ class LeitorDeOfertasService : AccessibilityService() {
             getSystemService(android.content.Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
         gerenciadorDeDisplay?.registerDisplayListener(ouvinteDeDisplay, null)
         sincronizarBolhas()
+        // Janelas só podem ser criadas/removidas na thread principal: sem o
+        // withContext abaixo, estas mudanças de ajuste falhavam caladas e a
+        // bolha não aparecia.
         escopo.launch {
             PontoVerdeApp.instancia.prefs.estado.collect { cfg ->
-                sincronizarBolhas()
-                if (!cfg.capturaLigada) cartoes?.esconderTudo()
+                withContext(Dispatchers.Main) {
+                    sincronizarBolhas()
+                    if (!cfg.capturaLigada) cartoes?.esconderTudo()
+                }
+                // A vigia acompanha o copiloto: sem ele não há o que vigiar.
+                if (cfg.capturaLigada) VigiaDoLeitor.ligar(this@LeitorDeOfertasService)
+                else VigiaDoLeitor.desligar(this@LeitorDeOfertasService)
+            }
+        }
+        escopo.launch {
+            EstadoLeitor.appAberto.collect {
+                withContext(Dispatchers.Main) { sincronizarBolhas() }
             }
         }
         EstadoLeitor.ativo.value = true
+        // A janela da tela preta sobe para a camada da acessibilidade agora que
+        // ela existe; sem o serviço ela só consegue ficar sobre os apps.
+        TelaPretaOverlay.reajustar()
+        // A vigia é ligada pelo coletor de preferências abaixo, que já emite o
+        // estado atual na primeira coleta — ligar aqui também só duplicava o alarme.
     }
 
     override fun onDestroy() {
         EstadoLeitor.ativo.value = false
-        EstadoLeitor.bolha = null
+        EstadoLeitor.servico = null
         bolhas.values.forEach { it.esconder() }
         bolhas.clear()
         gerenciadorDeDisplay?.unregisterDisplayListener(ouvinteDeDisplay)
@@ -111,6 +132,7 @@ class LeitorDeOfertasService : AccessibilityService() {
         narrador?.fechar()
         reconhecedor?.close()
         reconhecedor = null
+        VigiaDoLeitor.desligar(this)
         escopo.cancel()
         super.onDestroy()
     }
@@ -129,7 +151,8 @@ class LeitorDeOfertasService : AccessibilityService() {
         }
 
         desejados.forEach { id ->
-            if (!bolhas.containsKey(id)) {
+            val existente = bolhas[id]
+            if (existente == null) {
                 val contexto = if (id == Display.DEFAULT_DISPLAY) {
                     this
                 } else {
@@ -140,13 +163,17 @@ class LeitorDeOfertasService : AccessibilityService() {
                 val bolha = BolhaFlutuante(contexto) {
                     capturarForcada()
                 }
-                val mostrar = id != Display.DEFAULT_DISPLAY || !EstadoLeitor.appAberto
-                if (mostrar) bolha.mostrar()
                 bolhas[id] = bolha
+                if (deveMostrar(id)) bolha.mostrar()
+            } else {
+                // A bolha some dentro do app e volta quando ele sai de frente.
+                if (deveMostrar(id)) existente.mostrar() else existente.esconder()
             }
         }
-        EstadoLeitor.bolha = bolhas[Display.DEFAULT_DISPLAY]
     }
+
+    private fun deveMostrar(displayId: Int): Boolean =
+        displayId != Display.DEFAULT_DISPLAY || !EstadoLeitor.appAberto.value
 
     override fun onInterrupt() {
         ocupado.set(false)
@@ -187,7 +214,7 @@ class LeitorDeOfertasService : AccessibilityService() {
 
         val intervalo = if (cfg.turbo) TURBO_MS else cfg.cooldownMs.toLong()
         if (!reservar(agora, intervalo)) return
-        if (!ocupado.compareAndSet(false, true)) return
+        if (!ocupar()) return
 
         Log.i(
             TAG,
@@ -263,6 +290,41 @@ class LeitorDeOfertasService : AccessibilityService() {
         return Janela(Rect(0, 0, tamanho.x, tamanho.y), alvo)
     }
 
+    /**
+     * Marca o leitor como ocupado e arma o vigia. Devolve falso quando já existe
+     * uma leitura em andamento.
+     */
+    private fun ocupar(): Boolean {
+        if (!ocupado.compareAndSet(false, true)) return false
+        agendarVigia()
+        return true
+    }
+
+    /** Solta o leitor. Roda em qualquer caminho de saída, inclusive com erro. */
+    private fun liberar() {
+        ocupado.set(false)
+        vigiaRunnable?.let { vigia.removeCallbacks(it) }
+        vigiaRunnable = null
+    }
+
+    /**
+     * Rede de segurança: se uma captura ou o OCR nunca responder (o serviço de
+     * acessibilidade não avisa), o leitor destrava em vez de parar de ler
+     * ofertas até o app ser reiniciado.
+     */
+    private fun agendarVigia() {
+        vigiaRunnable?.let { vigia.removeCallbacks(it) }
+        val vigiaNovo = Runnable {
+            vigiaRunnable = null
+            if (ocupado.get()) {
+                Log.w(TAG, "leitura sem resposta há ${VIGIA_MS / 1000}s; liberando o leitor")
+                ocupado.set(false)
+            }
+        }
+        vigiaRunnable = vigiaNovo
+        vigia.postDelayed(vigiaNovo, VIGIA_MS)
+    }
+
     private fun reservar(agora: Long, intervalo: Long): Boolean {
         while (true) {
             val anterior = ultimaCaptura.get()
@@ -301,12 +363,11 @@ class LeitorDeOfertasService : AccessibilityService() {
 
     /** Leitura forçada acionada ao tocar na bolha flutuante. Captura a tela inteira e processa. */
     private fun capturarForcada() {
-        if (ocupado.get()) return
-        if (!ocupado.compareAndSet(false, true)) return
+        if (!ocupar()) return
 
         val cfg = PontoVerdeApp.instancia.prefs.estado.value
         if (!cfg.capturaLigada) {
-            ocupado.set(false)
+            liberar()
             return
         }
 
@@ -423,73 +484,125 @@ class LeitorDeOfertasService : AccessibilityService() {
         val texto = resultado.text
         Log.i(TAG, "OCR: ${texto.length} caracteres")
 
-        val lido = ParserOferta.ler(texto)
-        if (lido == null) {
-            Log.i(TAG, "sem campos. OCR: " + texto.replace('\n', ' ').take(300))
-            if (cfg.salvarPrint) {
-                val caminho = Prints.salvar(this, recorte)
-                Log.i(TAG, "print de diagnóstico: $caminho")
-            }
-            recorte.recycle()
-            falharLeitura(app, cfg, janela, pacote)
-            return
-        }
-
-        val oferta = ParserOferta.paraOferta(lido, app)
-        if (oferta.kmTrecho <= 0) {
-            recorte.recycle()
-            falharLeitura(app, cfg, janela, pacote)
-            return
-        }
-
-        val avaliacao = Avaliador.avaliar(oferta, cfg.limiaresDe(app))
-        val alertas = Alertas.montar(avaliacao, cfg.alertas)
-        val textoGuardar = if (cfg.salvarTexto) texto.take(4000) else null
-        Log.i(
-            TAG,
-            "oferta ${oferta.valor} · ${oferta.kmTrecho} km · ${oferta.minTrecho} min · " +
-                "embarque ${oferta.kmEmbarque} → ${avaliacao.corFinal}",
-        )
-
         escopo.launch {
-            val print = if (cfg.salvarPrint) {
-                withContext(Dispatchers.IO) { Prints.salvar(this@LeitorDeOfertasService, recorte) }
-            } else {
-                null
-            }
-            recorte.recycle()
+            try {
+                var lido = ParserOferta.ler(texto)
+                var fonte = "auto"
+                var iaBruta: String? = null
 
-            withContext(Dispatchers.IO) {
-                PontoVerdeApp.instancia.repositorio.registrar(avaliacao, alertas, textoGuardar, print)
-            }
-            withContext(Dispatchers.Main) {
-                ultimaAvaliacao = avaliacao
-                ultimosAlertas = alertas
-                ultimoCfg = cfg
-                ultimoPacote = pacote
-                ultimoRotulo = if (app == AppOrigem.OUTRO) rotuloDoPacote(pacote) else app.rotulo
-                ultimoDisplayId = if (cfg.modoTablet) janela?.displayId ?: Display.DEFAULT_DISPLAY
-                    else Display.DEFAULT_DISPLAY
-                ultimaArea = if (cfg.modoTablet) janela?.area else null
-
-                if (cfg.recusaAutomatica && avaliacao.corFinal == Cor.VERMELHO) {
-                    agendarRecusa()
+                // Corretor opcional: só chama a rede quando o parser local não
+                // entendeu (ou quando o usuário pediu IA em toda leitura).
+                if (CorretorIA.disponivel(cfg) &&
+                    (lido == null || lido.kmTrecho <= 0 || cfg.iaSempre)
+                ) {
+                    withContext(Dispatchers.Main) { agendarVigia() }
+                    val correcao = CorretorIA.corrigir(cfg, texto)
+                    iaBruta = correcao.bruto
+                    if (correcao.lido != null) {
+                        lido = correcao.lido
+                        fonte = "ia"
+                    }
+                    Log.i(
+                        TAG,
+                        "corretor IA: ${correcao.erro ?: "ok"} · " +
+                            "leu=${correcao.lido != null}",
+                    )
                 }
-                cartoes?.mostrar(
-                    pacote = pacote,
-                    rotulo = ultimoRotulo,
-                    displayId = ultimoDisplayId,
-                    area = ultimaArea,
-                    avaliacao = avaliacao,
-                    alertas = alertas,
-                    cfg = cfg,
-                    aoClicar = { cancelarRecusa() },
-                    segundosRestantesRecusa = segundosRestantesRecusa,
+
+                val oferta = lido?.let { ParserOferta.paraOferta(it, app) }
+                    ?.takeIf { it.kmTrecho > 0 }
+                val avaliacao = oferta?.let { Avaliador.avaliar(it, cfg.limiaresDe(app)) }
+                val alertas = avaliacao?.let { Alertas.montar(it, cfg.alertas) }.orEmpty()
+
+                val tela = buildString {
+                    append("${recorte.width}x${recorte.height}")
+                    janela?.let { append(" janela=${it.area} display=${it.displayId}") }
+                }
+
+                // Log de treino: imagem + OCR bruto + o que o parser entendeu.
+                // Roda antes de reciclar o bitmap e nunca derruba a leitura.
+                if (cfg.registrarLog) {
+                    withContext(Dispatchers.IO) {
+                        LogTreino.registrar(
+                            context = this@LeitorDeOfertasService,
+                            pacote = pacote,
+                            app = app.name,
+                            texto = texto,
+                            lido = lido,
+                            avaliacao = avaliacao,
+                            bitmap = recorte,
+                            tela = tela,
+                            fonte = fonte,
+                            iaBruta = iaBruta,
+                        )
+                    }
+                }
+
+                val print = if (cfg.salvarPrint) {
+                    withContext(Dispatchers.IO) {
+                        Prints.salvar(this@LeitorDeOfertasService, recorte)
+                    }
+                } else {
+                    null
+                }
+
+                if (oferta == null || avaliacao == null) {
+                    Log.i(TAG, "sem campos. OCR: " + texto.replace('\n', ' ').take(300))
+                    if (print != null) Log.i(TAG, "print de diagnóstico: $print")
+                    recorte.recycle()
+                    withContext(Dispatchers.Main) {
+                        falharLeitura(app, cfg, janela, pacote)
+                    }
+                    return@launch
+                }
+
+                val textoGuardar = if (cfg.salvarTexto) texto.take(4000) else null
+                Log.i(
+                    TAG,
+                    "oferta ${oferta.valor} · ${oferta.kmTrecho} km · ${oferta.minTrecho} min · " +
+                        "embarque ${oferta.kmEmbarque} → ${avaliacao.corFinal} (fonte=$fonte)",
                 )
-                EstadoLeitor.ultimaCor.value = avaliacao.corFinal
-                if (cfg.vozLigada) narrador?.falarCor(avaliacao.corFinal)
+
+                withContext(Dispatchers.IO) {
+                    PontoVerdeApp.instancia.repositorio.registrar(avaliacao, alertas, textoGuardar, print)
+                }
+                recorte.recycle()
+                EstadoLeitor.ultimaLeitura.value = System.currentTimeMillis()
+                VigiaDoLeitor.registrarLeitura(this@LeitorDeOfertasService)
+
+                withContext(Dispatchers.Main) {
+                    ultimaAvaliacao = avaliacao
+                    ultimosAlertas = alertas
+                    ultimoCfg = cfg
+                    ultimoPacote = pacote
+                    ultimoRotulo = if (app == AppOrigem.OUTRO) rotuloDoPacote(pacote) else app.rotulo
+                    ultimoDisplayId = if (cfg.modoTablet) janela?.displayId ?: Display.DEFAULT_DISPLAY
+                        else Display.DEFAULT_DISPLAY
+                    ultimaArea = if (cfg.modoTablet) janela?.area else null
+
+                    if (cfg.recusaAutomatica && avaliacao.corFinal == Cor.VERMELHO) {
+                        agendarRecusa()
+                    }
+                    cartoes?.mostrar(
+                        pacote = pacote,
+                        rotulo = ultimoRotulo,
+                        displayId = ultimoDisplayId,
+                        area = ultimaArea,
+                        avaliacao = avaliacao,
+                        alertas = alertas,
+                        cfg = cfg,
+                        aoClicar = { cancelarRecusa() },
+                        segundosRestantesRecusa = segundosRestantesRecusa,
+                    )
+                    EstadoLeitor.ultimaCor.value = avaliacao.corFinal
+                    if (cfg.vozLigada) narrador?.falarCor(avaliacao.corFinal)
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "falha ao guardar/abrir o cartão da oferta: ${t.message}")
+                runCatching { recorte.recycle() }
+            } finally {
+                liberar()
             }
-            ocupado.set(false)
         }
     }
 
@@ -510,7 +623,7 @@ class LeitorDeOfertasService : AccessibilityService() {
                 cfg = cfg,
             )
         }
-        ocupado.set(false)
+        liberar()
     }
 
     private fun agendarRecusa() {
@@ -577,7 +690,7 @@ class LeitorDeOfertasService : AccessibilityService() {
         while (fila.isNotEmpty()) {
             val proxima = mutableListOf<AccessibilityNodeInfo>()
             for (no in fila) {
-                if (no != null && no.isClickable && no.isEnabled) {
+                if (no.isClickable && no.isEnabled) {
                     val texto = (no.text ?: no.contentDescription ?: "").toString().lowercase()
                     val ehBotaoRecusaPorTexto = texto == "x" || texto.contains("recusar") ||
                         texto.contains("cancelar") || texto.contains("não") ||
@@ -593,13 +706,11 @@ class LeitorDeOfertasService : AccessibilityService() {
                         return
                     }
                 }
-                if (no != null) {
-                    for (i in 0 until no.childCount) {
-                        val filho = no.getChild(i)
-                        if (filho != null) proxima.add(filho)
-                    }
-                    no.recycle()
+                for (i in 0 until no.childCount) {
+                    val filho = no.getChild(i)
+                    if (filho != null) proxima.add(filho)
                 }
+                no.recycle()
             }
             fila.clear()
             fila.addAll(proxima)
@@ -637,5 +748,6 @@ class LeitorDeOfertasService : AccessibilityService() {
     companion object {
         const val TAG = "PontoVerde"
         const val TURBO_MS = 500L
+        const val VIGIA_MS = 20_000L
     }
 }

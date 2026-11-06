@@ -1,6 +1,9 @@
 package com.pontoverde.app.ui
 
+import android.Manifest
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -70,6 +73,7 @@ import com.pontoverde.app.PontoVerdeApp
 import com.pontoverde.app.capture.EstadoLeitor
 import com.pontoverde.app.capture.Permissoes
 import com.pontoverde.app.capture.TelaPretaOverlay
+import com.pontoverde.app.capture.VigiaDoLeitor
 import com.pontoverde.app.core.Cor
 import com.pontoverde.app.core.Formato
 import com.pontoverde.app.data.Configuracao
@@ -88,6 +92,20 @@ import java.util.Locale
 private fun mesmoDia(epoch: Long, dia: LocalDate): Boolean =
     Instant.ofEpochMilli(epoch).atZone(ZoneId.systemDefault()).toLocalDate() == dia
 
+/** Quando foi a última oferta lida, para dar para ver que o leitor parou. */
+private fun textoUltimaLeitura(epoch: Long?): String {
+    if (epoch == null) return "Nenhuma oferta lida desde que o app abriu."
+    val quando = Instant.ofEpochMilli(epoch)
+        .atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("HH:mm", Locale("pt", "BR")))
+    val minutos = (System.currentTimeMillis() - epoch) / 60_000
+    return when {
+        minutos < 1 -> "Última oferta lida agora ($quando)."
+        minutos < 60 -> "Última oferta lida às $quando, há $minutos min."
+        else -> "Última oferta lida às $quando, há ${minutos / 60} h."
+    }
+}
+
 @Composable
 fun PontoVerdeRoot() {
     val app = PontoVerdeApp.instancia
@@ -95,9 +113,8 @@ fun PontoVerdeRoot() {
     val registros by app.repositorio.registros.collectAsState()
     val config by app.prefs.estado.collectAsState()
     val ativo by EstadoLeitor.ativo.collectAsState()
-    val telaPretaOverlay = remember { TelaPretaOverlay(contexto) }
-
-    var telaPreta by remember { mutableStateOf(config.telaPreta) }
+    val telaPreta by TelaPretaOverlay.ativa.collectAsState()
+    val ultimaLeitura by EstadoLeitor.ultimaLeitura.collectAsState()
 
     var aba by remember { mutableIntStateOf(0) }
     var detalheId by remember { mutableStateOf<Long?>(null) }
@@ -106,6 +123,11 @@ fun PontoVerdeRoot() {
     var camposAberto by remember { mutableStateOf(false) }
     var devAberto by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
+    // A permissão de notificação é pedida na aba Copiloto, onde a vigia mora.
+    val notificacoesOk = remember(tick) { VigiaDoLeitor.podeNotificar(contexto) }
+    val pedirNotificacao = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { tick++ }
 
     val dono = LocalLifecycleOwner.current
     DisposableEffect(dono) {
@@ -116,7 +138,13 @@ fun PontoVerdeRoot() {
         onDispose { dono.lifecycle.removeObserver(observador) }
     }
 
-    val acessibilidade = remember(tick, ativo) { Permissoes.acessibilidadeAtiva(contexto) }
+    // Conectado de verdade é o que o serviço avisa; estar ligado nas configurações
+    // não basta, porque o Android pode derrubar o processo e deixar o serviço parado.
+    val acessibilidade = ativo
+    val acessibilidadeHabilitada = remember(tick, ativo) {
+        Permissoes.acessibilidadeHabilitada(contexto)
+    }
+    val otimizacaoDeBateria = remember(tick) { Permissoes.otimizacaoDeBateriaLigada(contexto) }
     val sobreposicao = remember(tick) { Permissoes.sobreposicaoAtiva(contexto) }
 
     val detalhe = registros.firstOrNull { it.id == detalheId }
@@ -186,15 +214,21 @@ fun PontoVerdeRoot() {
                     registros = registros,
                     config = config,
                     ativo = acessibilidade,
+                    habilitada = acessibilidadeHabilitada,
+                    otimizacaoDeBateria = otimizacaoDeBateria,
                     telaPreta = telaPreta,
-                    telaPretaOverlay = telaPretaOverlay,
+                    ultimaLeitura = ultimaLeitura,
+                    notificacoesOk = notificacoesOk,
+                    aoPedirNotificacoes = {
+                        runCatching {
+                            pedirNotificacao.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    },
                     aoAbrirDetalhe = { detalheId = it },
                     aoAlternarCaptura = { ligado ->
                         app.prefs.atualizar { it.copy(capturaLigada = ligado) }
                     },
-                    aoAlternarTelaPreta = { ligado ->
-                        app.prefs.atualizar { it.copy(telaPreta = ligado) }
-                    },
+                    aoAlternarTelaPreta = { TelaPretaOverlay.alternar() },
                 )
                 2 -> TelaHistorico(
                     registros = registros,
@@ -213,18 +247,63 @@ fun PontoVerdeRoot() {
     }
 }
 
+/**
+ * Estado da vigia: notificação permanente com a hora da última oferta e aviso
+ * quando o leitor passa muito tempo sem ler.
+ */
+@Composable
+private fun VigiaDoCopiloto(
+    ligada: Boolean,
+    notificacoesOk: Boolean,
+    aoPedirNotificacoes: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PontoStatus(ligada && notificacoesOk)
+            Spacer(Modifier.width(8.dp))
+            Text("Vigia do copiloto", fontSize = 15.sp, modifier = Modifier.weight(1f))
+            if (!notificacoesOk) {
+                TextButton(onClick = aoPedirNotificacoes) { Text("Permitir") }
+            }
+        }
+        Text(
+            when {
+                !notificacoesOk ->
+                    "Sem permissão de notificação: a vigia não tem como mostrar a hora da " +
+                        "última oferta nem avisar quando o leitor parar."
+                ligada ->
+                    "Fica na gaveta de notificações com a hora da última oferta e um " +
+                        "cronômetro que continua contando mesmo se o Android matar o app. " +
+                        "Passando de ${VigiaDoLeitor.LIMITE_MINUTOS} min sem ler, o celular " +
+                        "apita e vibra."
+                else ->
+                    "A vigia aparece quando o copiloto está ligado e o serviço de " +
+                        "acessibilidade conectado."
+            },
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
 @Composable
 private fun TelaCopiloto(
     registros: List<RegistroOferta>,
     config: Configuracao,
     ativo: Boolean,
+    habilitada: Boolean,
+    otimizacaoDeBateria: Boolean,
     telaPreta: Boolean,
-    telaPretaOverlay: TelaPretaOverlay,
+    ultimaLeitura: Long?,
+    notificacoesOk: Boolean,
+    aoPedirNotificacoes: () -> Unit,
     aoAbrirDetalhe: (Long) -> Unit,
     aoAlternarCaptura: (Boolean) -> Unit,
-    aoAlternarTelaPreta: (Boolean) -> Unit,
+    aoAlternarTelaPreta: () -> Unit,
 ) {
     val contexto = LocalContext.current
+    var engrenagemAberta by remember { mutableStateOf(false) }
     val hoje = LocalDate.now()
     val deHoje = registros.filter { mesmoDia(it.criadoEm, hoje) }
     val ultima = registros.firstOrNull()
@@ -247,7 +326,11 @@ private fun TelaCopiloto(
                 PontoStatus(ativo)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    if (ativo) "Serviço de acessibilidade ativo" else "Serviço de acessibilidade desligado",
+                    when {
+                        ativo -> "Serviço de acessibilidade conectado"
+                        habilitada -> "Acessibilidade ligada, mas o serviço está parado"
+                        else -> "Serviço de acessibilidade desligado"
+                    },
                     fontSize = 15.sp,
                     modifier = Modifier.weight(1f),
                 )
@@ -284,44 +367,90 @@ private fun TelaCopiloto(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            Button(
-                onClick = {
-                    if (telaPreta) {
-                        telaPretaOverlay.esconder()
-                    } else {
-                        telaPretaOverlay.mostrar()
-                    }
-                    aoAlternarTelaPreta(!telaPreta)
-                },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (telaPreta) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = if (telaPreta) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            Text(
+                textoUltimaLeitura(ultimaLeitura),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            VigiaDoCopiloto(
+                ligada = config.capturaLigada && ativo,
+                notificacoesOk = notificacoesOk,
+                aoPedirNotificacoes = aoPedirNotificacoes,
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Button(
+                    onClick = aoAlternarTelaPreta,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (telaPreta) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = if (telaPreta) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        if (telaPreta) "Desativar tela preta OLED" else "Tela preta OLED",
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                IconButton(onClick = { engrenagemAberta = true }) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Status da tela preta")
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PontoStatus(telaPreta)
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    if (telaPreta) "Desativar tela preta OLED" else "Tela preta OLED",
+                    if (telaPreta) "Tela preta ativa na tela do celular"
+                    else "Tela preta desligada na tela do celular",
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
                 )
             }
             Text(
-                "Cobre a tela principal de preto para evitar aquecimento quando o 99 " +
-                    "insiste em ligar a tela. Toque no X para sair.",
+                "Cobre de preto a tela do celular inteira — inclusive a barra de status e " +
+                    "a de navegação (a do Smart Connect continua normal) — para evitar " +
+                    "aquecimento quando o 99 insiste em ligar a tela. Para cobrir as barras " +
+                    "o serviço de acessibilidade precisa estar conectado; sem ele o preto " +
+                    "fica só sobre os apps. Toque no X para sair.",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
             if (!ativo) {
                 Text(
-                    "O serviço de acessibilidade está desligado no sistema. Ative para o copiloto funcionar.",
+                    if (habilitada) {
+                        "O serviço está ligado nas configurações, mas parou de rodar — por isso " +
+                            "nada é lido. Abra a acessibilidade, desligue e ligue o Ponto Verde de novo."
+                    } else {
+                        "O serviço de acessibilidade está desligado no sistema. Ative para o copiloto funcionar."
+                    },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 TextButton(onClick = { Permissoes.abrirAcessibilidade(contexto) }) {
                     Text("Abrir acessibilidade")
+                }
+            }
+            if (otimizacaoDeBateria) {
+                Text(
+                    "O Android ainda pode matar o copiloto para economizar bateria — foi " +
+                        "assim que as leituras pararam. Tire o Ponto Verde da lista de apps " +
+                        "restritos.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                TextButton(onClick = { Permissoes.pedirIgnorarOtimizacao(contexto) }) {
+                    Text("Desativar otimização de bateria")
                 }
             }
             Text(
@@ -374,6 +503,51 @@ private fun TelaCopiloto(
         }
         Spacer(Modifier.height(24.dp))
     }
+
+    if (engrenagemAberta) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { engrenagemAberta = false },
+            title = { Text("Tela preta OLED") },
+            text = {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "A tela preta está ativa na tela principal?",
+                            fontSize = 15.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Chip(
+                            if (telaPreta) "Sim" else "Não",
+                            if (telaPreta) Cor.VERDE else Cor.VERMELHO,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (telaPreta) {
+                            "O celular está coberto de preto agora. O monitor do " +
+                                "Smart Connect continua mostrando o app normalmente."
+                        } else {
+                            "Nada está cobrindo o celular agora: a tela dele pode " +
+                                "estar ligando e esquentando fora da sua vista."
+                        },
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "O status vem da janela que o app desenha no celular, não " +
+                            "de um botão: se o X for tocado ou o sistema fechar a " +
+                            "janela, ele muda sozinho.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { engrenagemAberta = false }) { Text("Fechar") }
+            },
+        )
+    }
 }
 
 @Composable
@@ -386,21 +560,6 @@ private fun Resumo(
     Column(modifier) {
         Text(valor, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = cor)
         Text(rotulo, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun ItemPermissao(titulo: String, ativo: Boolean, aoClicar: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PontoStatus(ativo)
-        Spacer(Modifier.width(10.dp))
-        Text(titulo, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        TextButton(onClick = aoClicar) {
-            Text(if (ativo) "ok" else "abrir")
-        }
     }
 }
 
@@ -707,7 +866,6 @@ private fun TelaDetalhe(
             }
 
             Secao("Cartão") {
-                val contexto = LocalContext.current
                 Button(
                     onClick = {
                         if (Permissoes.sobreposicaoAtiva(contexto)) {

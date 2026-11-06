@@ -3,10 +3,18 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Só para pedir ao sistema que não mate o copiloto para economizar bateria. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Vigia do copiloto: notificação com a hora da última oferta e aviso sonoro
+         quando o leitor para de ler. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- O ML Kit declara INTERNET; removemos para que o app não tenha como sair da rede. -->
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />
+    <!-- O corretor opcional (NVIDIA Nemotron) precisa de rede. Nada é enviado
+         enquanto a chave "Corretor IA" estiver desligada nas opções de
+         desenvolvedor; sem API key configurada o app não abre conexão. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <queries>
         <package android:name="com.ubercab.driver" />
@@ -35,6 +43,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Acorda o app para avisar quando a última leitura ficou velha. -->
+        <receiver
+            android:name=".capture.VigiaRecebedor"
+            android:exported="false" />
 
         <service
             android:name=".capture.LeitorDeOfertasService"
