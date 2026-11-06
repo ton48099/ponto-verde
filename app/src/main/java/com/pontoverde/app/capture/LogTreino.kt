@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import com.pontoverde.app.BuildConfig
 import com.pontoverde.app.core.Avaliacao
 import com.pontoverde.app.core.ParserOferta
 import org.json.JSONObject
@@ -34,7 +35,9 @@ import java.util.zip.ZipOutputStream
 object LogTreino {
 
     const val PASTA = "log_treino"
-    private const val VERSAO = "0.2.0"
+
+    /** Vem do Gradle, para o JSON não mentir quando a versão sobe. */
+    private val VERSAO: String = BuildConfig.VERSION_NAME
     private const val LARGURA_MAX = 1080
 
     data class Resumo(val eventos: Int, val bytes: Long) {

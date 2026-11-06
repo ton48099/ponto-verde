@@ -24,7 +24,14 @@ import java.net.URL
 object CorretorIA {
 
     const val ENDERECO_PADRAO = "https://integrate.api.nvidia.com/v1/chat/completions"
-    const val MODELO_PADRAO = "nvidia/nemotron-3-ultra-550b-a55b"
+
+    /**
+     * Escolhido por benchmark com 11 cartões reais e sintéticos (Uber, 99, OCR
+     * com "lhe55 min", milhar, por-km, surge, lixo e não-oferta): respondeu
+     * certo em todos, entre 0,45 s e 2,0 s. Os "super"/"ultra" da mesma família
+     * devolveram 404 ou conteúdo vazio com max_tokens=300.
+     */
+    const val MODELO_PADRAO = "nvidia/nemotron-3.5-bolt-e4b"
 
     private const val CONECTAR_MS = 10_000
     private const val LER_MS = 25_000

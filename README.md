@@ -4,7 +4,7 @@ Avaliador local de ofertas de corrida para Android. Lê a oferta que aparece na 
 dos apps de motorista, calcula R$/km e R$/h, pinta um cartão com a cor da oferta e
 guarda tudo num histórico local, dia a dia.
 
-**Pacote:** `com.pontoverde.app` · **Versão:** 0.2.0 · **Uso:** estritamente pessoal.
+**Pacote:** `com.pontoverde.app` · **Versão:** 0.2.1 · **Uso:** estritamente pessoal.
 
 ## Privacidade
 
@@ -119,7 +119,16 @@ segundo leitor: quando o parser local não entende a oferta (ou em toda leitura,
 da NVIDIA e a resposta em JSON é usada no lugar. A chave é sua, fica salva nas
 preferências do app e o endpoint/modelo são configuráveis — o padrão é
 `https://integrate.api.nvidia.com/v1/chat/completions` com
-`nvidia/nemotron-3-ultra-550b-a55b`.
+`nvidia/nemotron-3.5-bolt-e4b`.
+
+Esse modelo foi escolhido por benchmark, não por tamanho: em 11 cartões (Uber, 99,
+OCR com `lhe55 min`, valor com milhar, `Est. de R$/km`, surge, texto com lixo e
+conversa que não é oferta) o **bolt** acertou todos em 0,45–2,0 s. O
+`nemotron-3-super-120b-a12b` devolve 404 nessa conta, o `ultra-550b` e o
+`lightning-30b` devolvem conteúdo vazio com `max_tokens=300`, e
+`deepseek-v4.1-flash`, `gpt-oss-20b` e `glm-5.3-flash` estouram 60 s. Se quiser
+testar outro, é só trocar o campo **Modelo** — o botão **Listar modelos da conta**
+mostra os IDs válidos.
 
 O cartão tem **Testar conexão** (manda uma oferta de exemplo) e **Listar modelos da
 conta** (mostra os IDs que a sua chave pode usar). O resultado da IA aparece no log de

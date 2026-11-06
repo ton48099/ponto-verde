@@ -363,10 +363,10 @@ fun TelaDev(aoVoltar: () -> Unit, aoAbrirCalculadora: () -> Unit) {
 
             SecaoExpansivel(
                 titulo = "Sobre",
-                resumo = "Ponto Verde 0.2.0 · uso pessoal",
+                resumo = "Ponto Verde 0.2.1 · uso pessoal",
             ) {
                 Text(
-                    "Ponto Verde 0.2.0 · uso pessoal · internet só com o corretor IA ligado",
+                    "Ponto Verde 0.2.1 · uso pessoal · internet só com o corretor IA ligado",
                     fontSize = 12.sp,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )

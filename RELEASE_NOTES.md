@@ -1,4 +1,4 @@
-# Ponto Verde 0.2.0
+# Ponto Verde 0.2.1
 
 ## Sobre
 Avaliador local de ofertas de corrida para Android. Lê a oferta que aparece na tela dos apps de motorista (Uber, 99, inDrive, iFood, Taxi Machine, Regional), calcula R$/km e R$/h, pinta um cartão com a cor da oferta e guarda tudo num histórico local, dia a dia.
@@ -12,6 +12,12 @@ Baixe o APK abaixo e instale no seu Android (requer Android 11+).
 - **Notificações:** para o vigia do copiloto (opcional)
 - **Internet:** só usada quando o corretor IA está ligado; desligado por padrão
 
+## Correções na versão 0.2.1
+
+- **Modelo padrão do corretor IA trocado para `nvidia/nemotron-3.5-bolt-e4b`.** O padrão anterior (`nemotron-3-ultra-550b-a55b`) devolvia conteúdo vazio com `max_tokens=300`, então o botão **Testar conexão** falhava mesmo com a chave certa.
+- Escolha feita por benchmark com 11 cartões reais e sintéticos: o **bolt** acertou todos (incluindo `lhe55 min` → 55 min, milhar rejeitado, `Est. de R$/km` ignorado, surge e não-oferta) em 0,45–2,0 s.
+- `nemotron-3-super-120b-a12b` devolve 404 nessa conta; `deepseek-v4.1-flash`, `gpt-oss-20b` e `glm-5.3-flash` estouram 60 s — por isso não são o padrão.
+
 ## Novidades na versão 0.2.0
 
 ### Log de treino
@@ -24,7 +30,7 @@ Baixe o APK abaixo e instale no seu Android (requer Android 11+).
 
 ### Corretor IA (opcional, NVIDIA Nemotron)
 - Quando o parser local não entende a oferta (ou em toda leitura, se ligado), manda o OCR bruto para a API da NVIDIA e usa o JSON devolvido.
-- Chave, modelo e endpoint configuráveis; padrão `nvidia/nemotron-3-ultra-550b-a55b`.
+- Chave, modelo e endpoint configuráveis; padrão `nvidia/nemotron-3.5-bolt-e4b`.
 - Botões **Testar conexão** e **Listar modelos da conta**.
 - Desligado por padrão. Sem API key, o app não abre conexão.
 
