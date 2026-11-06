@@ -120,7 +120,7 @@ fun TelaDev(aoVoltar: () -> Unit, aoAbrirCalculadora: () -> Unit) {
             SecaoExpansivel(
                 titulo = "Permissões",
                 resumo = (if (conectada) "acessibilidade conectada"
-                else if (habilitada) "acessibilidade parada"
+                else if (habilitada) "acessibilidade religando"
                 else "acessibilidade pendente") +
                     " · " + (if (sobreposicao) "sobreposição ok" else "sobreposição pendente"),
             ) {
@@ -363,10 +363,10 @@ fun TelaDev(aoVoltar: () -> Unit, aoAbrirCalculadora: () -> Unit) {
 
             SecaoExpansivel(
                 titulo = "Sobre",
-                resumo = "Ponto Verde 0.2.1 · uso pessoal",
+                resumo = "Ponto Verde 0.2.2 · uso pessoal",
             ) {
                 Text(
-                    "Ponto Verde 0.2.1 · uso pessoal · internet só com o corretor IA ligado",
+                    "Ponto Verde 0.2.2 · uso pessoal · internet só com o corretor IA ligado",
                     fontSize = 12.sp,
                     modifier = Modifier.padding(vertical = 8.dp),
                 )

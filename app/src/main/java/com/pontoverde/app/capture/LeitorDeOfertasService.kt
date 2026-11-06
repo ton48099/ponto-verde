@@ -28,6 +28,7 @@ import com.pontoverde.app.core.AppOrigem
 import com.pontoverde.app.core.Avaliador
 import com.pontoverde.app.core.Avaliacao
 import com.pontoverde.app.core.Cor
+import com.pontoverde.app.core.Oferta
 import com.pontoverde.app.core.ParserOferta
 import com.pontoverde.app.data.Configuracao
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +70,9 @@ class LeitorDeOfertasService : AccessibilityService() {
     private var ultimoCfg: Configuracao? = null
     private var ultimoPacote = ""
     private var ultimoRotulo: String? = null
+    /** Assinatura da última oferta lida, para não repetir o cartão enquanto ela pisca. */
+    private var chaveOferta: String? = null
+    private var chaveOfertaEm = 0L
     private var ultimoDisplayId = Display.DEFAULT_DISPLAY
     private var ultimaArea: Rect? = null
     private var reconhecedor: TextRecognizer? = null
@@ -87,6 +91,7 @@ class LeitorDeOfertasService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        Log.i(TAG, "serviço de acessibilidade conectado")
         EstadoLeitor.servico = this
         reconhecedor = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         narrador = Narrador(this)
@@ -123,6 +128,7 @@ class LeitorDeOfertasService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        Log.i(TAG, "serviço de acessibilidade destruído")
         EstadoLeitor.ativo.value = false
         EstadoLeitor.servico = null
         bolhas.values.forEach { it.esconder() }
@@ -204,6 +210,16 @@ class LeitorDeOfertasService : AccessibilityService() {
             Log.i(TAG, "sem janela para $pacote no display $displayDoEvento; ignorando")
             return
         }
+
+        // O cartão de oferta da Uber pulsa e gera eventos sem parar. Sem esta
+        // guarda, cada evento escondia o nosso cartão para tirar o print e o
+        // mostrava de novo: o cartão de 5 s piscava e durava menos de 1 s.
+        val displayDoCartao = if (cfg.modoTablet) {
+            janela?.displayId ?: displayDoEvento
+        } else {
+            Display.DEFAULT_DISPLAY
+        }
+        if (cartoes?.visivel(pacote, displayDoCartao) == true) return
 
         val pacoteAtivo = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
         if (pacoteAtivo == packageName) return
@@ -514,6 +530,18 @@ class LeitorDeOfertasService : AccessibilityService() {
                 val avaliacao = oferta?.let { Avaliador.avaliar(it, cfg.limiaresDe(app)) }
                 val alertas = avaliacao?.let { Alertas.montar(it, cfg.alertas) }.orEmpty()
 
+                // O card da Uber pisca e gera uma leitura a cada 2 s. Se a
+                // oferta é a mesma de agora há pouco, não grava outra linha no
+                // histórico, não repete o log e não reabre o cartão.
+                val chave = oferta?.let { chaveDaOferta(it) }
+                val agora = SystemClock.elapsedRealtime()
+                val repetida = chave != null && chave == chaveOferta &&
+                    agora - chaveOfertaEm < REPETIDA_MS
+                if (chave != null) {
+                    chaveOferta = chave
+                    chaveOfertaEm = agora
+                }
+
                 val tela = buildString {
                     append("${recorte.width}x${recorte.height}")
                     janela?.let { append(" janela=${it.area} display=${it.displayId}") }
@@ -521,7 +549,7 @@ class LeitorDeOfertasService : AccessibilityService() {
 
                 // Log de treino: imagem + OCR bruto + o que o parser entendeu.
                 // Roda antes de reciclar o bitmap e nunca derruba a leitura.
-                if (cfg.registrarLog) {
+                if (cfg.registrarLog && !repetida) {
                     withContext(Dispatchers.IO) {
                         LogTreino.registrar(
                             context = this@LeitorDeOfertasService,
@@ -536,6 +564,14 @@ class LeitorDeOfertasService : AccessibilityService() {
                             iaBruta = iaBruta,
                         )
                     }
+                }
+
+                if (repetida) {
+                    Log.i(TAG, "mesma oferta de agora há pouco; cartão e histórico mantidos")
+                    recorte.recycle()
+                    EstadoLeitor.ultimaLeitura.value = System.currentTimeMillis()
+                    VigiaDoLeitor.registrarLeitura(this@LeitorDeOfertasService)
+                    return@launch
                 }
 
                 val print = if (cfg.salvarPrint) {
@@ -740,6 +776,11 @@ class LeitorDeOfertasService : AccessibilityService() {
         dispatchGesture(gesto, null, null)
     }
 
+    /** Assinatura curta da oferta: muda quando preço, distância ou tempo mudam. */
+    private fun chaveDaOferta(oferta: Oferta): String =
+        "${oferta.app}|${oferta.valor}|${oferta.kmTrecho}|${oferta.minTrecho}|" +
+            "${oferta.kmEmbarque}|${oferta.minEmbarque}"
+
     private fun rotuloDoPacote(pacote: String): String = runCatching {
         val pm = packageManager
         pm.getApplicationLabel(pm.getApplicationInfo(pacote, 0)).toString()
@@ -749,5 +790,12 @@ class LeitorDeOfertasService : AccessibilityService() {
         const val TAG = "PontoVerde"
         const val TURBO_MS = 500L
         const val VIGIA_MS = 20_000L
+
+        /**
+         * Por quanto tempo a mesma oferta é considerada repetida. O card da
+         * Uber fica na tela pulsando por 10–15 s; dentro dessa janela o leitor
+         * não abre outro cartão nem grava outra linha no histórico.
+         */
+        const val REPETIDA_MS = 15_000L
     }
 }

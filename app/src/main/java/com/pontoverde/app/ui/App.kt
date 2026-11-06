@@ -322,14 +322,23 @@ private fun TelaCopiloto(
         )
 
         Secao("Leitor") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                // Quando o serviço não está conectado, tocar na linha leva direto
+                // ao ajuste do sistema: é de lá que ele volta.
+                modifier = Modifier.clickable(enabled = !ativo) {
+                    Permissoes.abrirAcessibilidade(contexto)
+                },
+            ) {
                 PontoStatus(ativo)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     when {
                         ativo -> "Serviço de acessibilidade conectado"
-                        habilitada -> "Acessibilidade ligada, mas o serviço está parado"
-                        else -> "Serviço de acessibilidade desligado"
+                        // O Android religa o serviço sozinho no primeiro evento de
+                        // outro app; "parado" assustava sem motivo.
+                        habilitada -> "Acessibilidade ligada; o serviço está religando (toque para abrir as configurações)"
+                        else -> "Serviço de acessibilidade desligado (toque para ligar)"
                     },
                     fontSize = 15.sp,
                     modifier = Modifier.weight(1f),

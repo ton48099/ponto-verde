@@ -34,6 +34,10 @@ class CartaoFlutuante(private val context: Context) {
     private var raiz: View? = null
     private var params: WindowManager.LayoutParams? = null
     private val esconderRunnable = Runnable { esconder() }
+
+    /** Verdadeiro enquanto o cartão está na tela (entre mostrar e esconder). */
+    val visivel: Boolean get() = raiz != null
+
     /** Chamado quando o usuário toca no card (sem arrastar). */
     var aoClicar: (() -> Unit)? = null
     /** Chamado quando o card some da tela (tempo esgotado ou toque). */

@@ -61,6 +61,16 @@ class Cartoes(private val servico: AccessibilityService) {
         porJanela.clear()
     }
 
+    /**
+     * O cartão daquela janela está na tela? O leitor usa isso para não capturar
+     * de novo enquanto o cartão aparece: o card da Uber pisca e, sem a guarda,
+     * cada evento escondia e reescrevia o nosso cartão.
+     */
+    fun visivel(pacote: String, displayId: Int): Boolean {
+        if (!PontoVerdeApp.instancia.prefs.estado.value.modoTablet) return unico.visivel
+        return porJanela["$pacote@$displayId"]?.visivel == true
+    }
+
     /** Esconde só o cartão daquela janela, antes de capturar a tela. */
     fun esconder(pacote: String, displayId: Int) {
         if (!PontoVerdeApp.instancia.prefs.estado.value.modoTablet) {

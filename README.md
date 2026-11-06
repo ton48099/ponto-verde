@@ -4,7 +4,7 @@ Avaliador local de ofertas de corrida para Android. Lê a oferta que aparece na 
 dos apps de motorista, calcula R$/km e R$/h, pinta um cartão com a cor da oferta e
 guarda tudo num histórico local, dia a dia.
 
-**Pacote:** `com.pontoverde.app` · **Versão:** 0.2.1 · **Uso:** estritamente pessoal.
+**Pacote:** `com.pontoverde.app` · **Versão:** 0.2.2 · **Uso:** estritamente pessoal.
 
 ## Privacidade
 
